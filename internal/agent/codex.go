@@ -64,13 +64,20 @@ func codex(home string) *Agent {
 				stash(map[string]string{"codex.model": get("model"), "codex.effort": get("model_reasoning_effort"),
 					"codex.provider": get("model_provider")})
 			}
-			if err := edit.SetTOMLTable(path, "model_providers."+magpieID,
-				edit.KV{Path: "name", Value: "magpie"},
-				edit.KV{Path: "base_url", Value: gatewayV1()},
-				edit.KV{Path: "wire_api", Value: "responses"},
-				edit.KV{Path: "experimental_bearer_token", Value: gateway.Token},
-				edit.KV{Path: "requires_openai_auth", Value: true},
-			); err != nil {
+			// Browser use needs a token, which requires_openai_auth asks for,
+			// but Codex opens its sign-in screen when a provider claims OpenAI
+			// auth and none is stored: users who only run third-party models
+			// would not get past it. Claim it only for a ChatGPT sign-in.
+			kvs := []edit.KV{
+				{Path: "name", Value: "magpie"},
+				{Path: "base_url", Value: gatewayV1()},
+				{Path: "wire_api", Value: "responses"},
+				{Path: "experimental_bearer_token", Value: gateway.Token},
+			}
+			if provider.CodexSignedIn(home) {
+				kvs = append(kvs, edit.KV{Path: "requires_openai_auth", Value: true})
+			}
+			if err := edit.SetTOMLTable(path, "model_providers."+magpieID, kvs...); err != nil {
 				return err
 			}
 			if err := edit.WriteAtomic(catalogPath, codexCatalog(magpieModels())); err != nil {

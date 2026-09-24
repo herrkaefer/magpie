@@ -625,6 +625,14 @@ type codexAuth struct {
 	} `json:"tokens"`
 }
 
+// CodexSignedIn reports whether a ChatGPT sign-in is stored under this home.
+// Codex opens its sign-in screen when a provider claims OpenAI auth and no
+// such sign-in is stored, so callers ask first.
+func CodexSignedIn(home string) bool {
+	_, ok := codexAccount(home)
+	return ok
+}
+
 func codexAccount(home string) (Provider, bool) {
 	path := filepath.Join(home, ".codex", "auth.json")
 	var a codexAuth

@@ -61,7 +61,7 @@ func TestRenameLegacy(t *testing.T) {
 		t.Fatalf("opencode:\n%s", oc)
 	}
 	cx := read(".codex/config.toml")
-	if strings.Contains(cx, "dial") || !strings.Contains(cx, "[model_providers.magpie]") || !strings.Contains(cx, `model_provider = "magpie"`) || !strings.Contains(cx, "requires_openai_auth = true") || !strings.Contains(cx, `[projects."/x"]`) {
+	if strings.Contains(cx, "dial") || !strings.Contains(cx, "[model_providers.magpie]") || !strings.Contains(cx, `model_provider = "magpie"`) || !strings.Contains(cx, `[projects."/x"]`) {
 		t.Fatalf("codex:\n%s", cx)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "dial-models.json")); err == nil {

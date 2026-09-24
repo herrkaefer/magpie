@@ -168,9 +168,10 @@ model (`opus`, `sonnet`…) removes them and restores whatever was there.
 
 **Codex** gets a `[model_providers.magpie]` table, `model_catalog_json`
 pointing at `~/.codex/magpie-models.json` (written from the catalog, so the
-models show in Codex's own list) and a valid `model`/`effort`; the table
-declares `requires_openai_auth` so Codex's browser use can ask for a token;
-picking a native model removes all of that. Your ChatGPT sign-in is never touched.
+models show in Codex's own list) and a valid `model`/`effort`; while a ChatGPT
+sign-in is stored, the table also declares `requires_openai_auth`, which is what
+Codex's browser use asks for before it needs a token; picking a native model removes
+all of that. Your ChatGPT sign-in is never touched.
 Codex reads its model list at start-up, so restart it after a switch.
 
 **OpenCode, Pi, Crush** get a `magpie` provider entry and `magpie/provider/model`.
