@@ -69,6 +69,7 @@ func codex(home string) *Agent {
 				edit.KV{Path: "base_url", Value: gatewayV1()},
 				edit.KV{Path: "wire_api", Value: "responses"},
 				edit.KV{Path: "experimental_bearer_token", Value: gateway.Token},
+				edit.KV{Path: "requires_openai_auth", Value: true},
 			); err != nil {
 				return err
 			}
