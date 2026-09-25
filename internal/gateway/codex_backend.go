@@ -66,7 +66,7 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.Method == http.MethodPost && rest == "/responses":
 		if model := modelOf(body); isCatalogID(model) {
-			body, compact := codexInput(body)
+			body, compact := codexInput(body, true)
 			if compact {
 				s.codexCompact(w, r, body)
 				return
@@ -74,7 +74,7 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 			s.serve(w, r, provider.Responses, body)
 			return
 		}
-		body, _ = codexInput(body)
+		body, _ = codexInput(body, false)
 	}
 	s.codexUpstream(w, r, rest, body)
 }
@@ -269,11 +269,10 @@ func modelsEtag(h http.Header) {
 	}
 }
 
-// codexInput readies Codex's input for whoever serves it: a summary magpie
-// made becomes the message it stands for, and the backend's own controls
-// go. compact reports a request to compact the conversation, whose trigger
-// becomes the request to summarise it.
-func codexInput(body []byte) (_ []byte, compact bool) {
+// codexInput restores summaries magpie made. For a magpie model, it also
+// replaces Codex's compaction trigger with a request to summarise the input.
+// OpenAI's own models keep the trigger for their backend to handle.
+func codexInput(body []byte, magpieModel bool) (_ []byte, compact bool) {
 	var q map[string]json.RawMessage
 	if json.Unmarshal(body, &q) != nil {
 		return body, false
@@ -298,6 +297,10 @@ func codexInput(body []byte) (_ []byte, compact bool) {
 				out = append(out, userMessage(codexSummaryPrefix+"\n"+string(b)))
 			}
 		case "compaction_trigger":
+			if !magpieModel {
+				out = append(out, it)
+				continue
+			}
 			changed, compact = true, true
 			out = append(out, userMessage(codexCompactPrompt))
 		default:

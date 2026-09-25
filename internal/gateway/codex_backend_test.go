@@ -78,6 +78,44 @@ func TestCodexOwnModelPassesThrough(t *testing.T) {
 	}
 }
 
+func TestCodexOwnModelCompactionPassesThrough(t *testing.T) {
+	setup(t, provider.Chat, &fake{t: t})
+	var got [][]byte
+	chatgpt(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, b)
+		if !streamOf(b) {
+			http.Error(w, `{"detail":"Stream must be set to true"}`, http.StatusBadRequest)
+			return
+		}
+		w.Header()["Content-Type"] = nil
+		io.WriteString(w, sse(
+			`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","id":"cmp_openai","encrypted_content":"openai-own"}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_openai","status":"completed","output":[{"type":"compaction","id":"cmp_openai","encrypted_content":"openai-own"}]}}`))
+	})
+	original := `{"model":"gpt-6-sol","stream":true,"tools":[{"type":"function","name":"shell"}],"input":[{"type":"message","role":"user","content":"remember this"},{"type":"compaction_trigger"}]}`
+	code, body := codexPost(t, original)
+	if code != 200 || !strings.Contains(body, `"id":"cmp_openai"`) || len(got) != 1 || string(got[0]) != original {
+		t.Fatalf("own compact: %d %s; upstream %q", code, body, got)
+	}
+
+	sum := magpieCompaction + base64.StdEncoding.EncodeToString([]byte("prior summary"))
+	code, body = codexPost(t, `{"model":"gpt-6-sol","stream":true,"tools":[{"type":"function","name":"shell"}],"input":[{"type":"compaction","encrypted_content":"`+sum+`"},{"type":"compaction_trigger"}]}`)
+	if code != 200 || len(got) != 2 {
+		t.Fatalf("mixed compact: %d %s; %d upstream requests", code, body, len(got))
+	}
+	var q struct {
+		Stream bool             `json:"stream"`
+		Tools  []map[string]any `json:"tools"`
+		Input  []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(got[1], &q); err != nil || !q.Stream || len(q.Tools) != 1 || len(q.Input) != 2 ||
+		q.Input[0]["type"] != "message" || q.Input[1]["type"] != "compaction_trigger" ||
+		!strings.Contains(string(got[1]), "prior summary") || strings.Contains(string(got[1]), codexCompactPrompt) {
+		t.Errorf("mixed compact upstream: %s (%v)", got[1], err)
+	}
+}
+
 // A magpie model is served by magpie, whatever sign-in Codex sent.
 func TestCodexMagpieModelServed(t *testing.T) {
 	f := &fake{t: t, reply: sse(
@@ -147,6 +185,10 @@ func TestCodexCompactsMagpieModel(t *testing.T) {
 	b, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(enc, magpieCompaction))
 	if item["type"] != "compaction" || !strings.HasPrefix(enc, magpieCompaction) || string(b) != "SUMMARY" || !completed {
 		t.Errorf("events: %s", body)
+	}
+	code, _ = codexPost(t, `{"model":"fake/m1","stream":true,"input":[{"type":"compaction","encrypted_content":"`+enc+`"},{"type":"message","role":"user","content":"continue"}]}`)
+	if code != 200 || !strings.Contains(string(f.got), "SUMMARY") || !strings.Contains(string(f.got), codexSummaryPrefix) || strings.Contains(string(f.got), magpieCompaction) {
+		t.Errorf("compacted conversation was not restored: %d %s", code, f.got)
 	}
 }
 
