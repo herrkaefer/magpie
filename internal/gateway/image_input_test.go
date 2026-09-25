@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,8 +38,6 @@ func TestKnownTextOnlyModelRejectsImagesBeforeUpstream(t *testing.T) {
 		{"/v1/chat/completions", `{"model":"probe/text","messages":[{"role":"user","content":[{"type":"text","text":"read"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}]}`},
 		{"/v1/responses", `{"model":"probe/text","input":[{"role":"user","content":[{"type":"input_text","text":"read"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]}]}`},
 		{"/v1/messages", `{"model":"probe/text","max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"read"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]}]}`},
-		{"/v1/messages", `{"model":"probe/text","max_tokens":16,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"text","text":"screenshot"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]}]}]}`},
-		{"/messages", `{"model":"probe/text","max_tokens":16,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]}]}]}`},
 		{"/v1beta/models/probe/text:generateContent", `{"contents":[{"role":"user","parts":[{"text":"read"},{"inlineData":{"mimeType":"image/png","data":"aGVsbG8="}}]}]}`},
 	}
 	for _, tc := range cases {
@@ -120,18 +119,98 @@ func TestAnthropicTextOnlyToolResultImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	image := `{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]}]}`
-	current := `{"model":"text/m","max_tokens":16,"messages":[` + image + `]}`
+	current := `{"model":"text/m","max_tokens":16,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]},{"type":"text","text":"now answer"}]}]}`
 	s := New()
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(current)))
-	if rec.Code != 400 || len(sent) != 0 {
-		t.Fatalf("current tool-result image: %d %s; upstream calls %d", rec.Code, rec.Body.String(), len(sent))
+	if rec.Code != 200 || len(sent) != 1 || strings.Contains(sent[0], "aGVsbG8=") || !strings.Contains(sent[0], "Image omitted") {
+		t.Fatalf("current tool-result image: %d %s; upstream %v", rec.Code, rec.Body.String(), sent)
 	}
 	history := `{"model":"text/m","max_tokens":16,"messages":[` + image + `,{"role":"assistant","content":"seen"},{"role":"user","content":"now answer"}]}`
 	rec = httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(history)))
-	if rec.Code != 200 || len(sent) != 1 || strings.Contains(sent[0], "aGVsbG8=") || !strings.Contains(sent[0], "Image omitted") {
+	if rec.Code != 200 || len(sent) != 2 || strings.Contains(sent[1], "aGVsbG8=") || !strings.Contains(sent[1], "Image omitted") {
 		t.Fatalf("historical tool-result image: %d %s; upstream %v", rec.Code, rec.Body.String(), sent)
+	}
+	mixed := `{"model":"text/m","max_tokens":16,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]}]}`
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(mixed)))
+	if rec.Code != 400 || len(sent) != 2 {
+		t.Fatalf("current user image beside tool result: %d %s; upstream %v", rec.Code, rec.Body.String(), sent)
+	}
+}
+
+func TestTextOnlyModelOmitsToolImages(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, endpoint, body string
+	}{
+		{"responses-current", "/v1/responses", "responses", `{"model":"probe/text","input":[{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"screenshot"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]},{"role":"user","content":[{"type":"input_text","text":"answer"}]}]}`},
+		{"responses-last", "/v1/responses", "responses", `{"model":"probe/text","input":[{"role":"user","content":[{"type":"input_text","text":"read"}]},{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]}]}`},
+		{"responses-to-chat", "/v1/responses", "chat", `{"model":"probe/text","input":[{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"screenshot"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]},{"role":"user","content":[{"type":"input_text","text":"answer"}]}]}`},
+		{"chat-tool", "/v1/chat/completions", "chat", `{"model":"probe/text","messages":[{"role":"tool","tool_call_id":"call_1","content":[{"type":"text","text":"screenshot"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fresh(t)
+			var sent string
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				sent = string(body)
+				if strings.Contains(sent, `"stream":true`) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, sse(
+						`data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}`,
+						`data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+						`data: [DONE]`,
+					))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"id":"x","output":[],"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+			}))
+			defer up.Close()
+			p := provider.Provider{ID: "probe", Key: "key", Models: []string{"text"}}
+			if tc.endpoint == "responses" {
+				p.Responses = up.URL + "/v1"
+			} else {
+				p.Chat = up.URL + "/v1"
+			}
+			if err := provider.Save(p); err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.SaveLive("probe", up.URL+"/v1", []catalog.Model{{ID: "text", ImageInput: imageInputBool(false)}}); err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			New().Handler().ServeHTTP(rec, httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body)))
+			if rec.Code != 200 || strings.Contains(sent, "aGVsbG8=") || !strings.Contains(sent, "Image omitted") || !strings.Contains(sent, "call_1") {
+				t.Fatalf("tool image: %d %s; upstream %s", rec.Code, rec.Body.String(), sent)
+			}
+			if tc.endpoint == "responses" {
+				var request struct {
+					Input []struct {
+						Type   string
+						CallID string `json:"call_id"`
+						Output []struct{ Type, Text string }
+					}
+				}
+				if err := json.Unmarshal([]byte(sent), &request); err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, item := range request.Input {
+					if item.Type != "function_call_output" {
+						continue
+					}
+					found = true
+					if item.CallID != "call_1" || len(item.Output) == 0 || item.Output[len(item.Output)-1].Type != "input_text" || !strings.Contains(item.Output[len(item.Output)-1].Text, "Image omitted") {
+						t.Fatalf("invalid Responses tool output: %+v", item)
+					}
+				}
+				if !found {
+					t.Fatalf("Responses function_call_output missing: %s", sent)
+				}
+			}
+		})
 	}
 }
 

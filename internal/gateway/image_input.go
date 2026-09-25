@@ -7,9 +7,9 @@ import (
 	"github.com/yetone/magpie/internal/provider"
 )
 
-// textOnlyBody rejects an image in the latest turn and omits images in older
-// turns. It edits the wire JSON so passthrough keeps fields the IR does not
-// represent (such as provider-specific request options).
+// textOnlyBody rejects a user image in the latest turn and omits tool images
+// and images in older turns. It edits the wire JSON so passthrough keeps fields
+// the IR does not represent (such as provider-specific request options).
 func textOnlyBody(proto provider.Protocol, body []byte) ([]byte, bool) {
 	var request map[string]json.RawMessage
 	if json.Unmarshal(body, &request) != nil {
@@ -32,14 +32,27 @@ func textOnlyBody(proto provider.Protocol, body []byte) ([]byte, bool) {
 		if json.Unmarshal(raw, &turn) != nil {
 			continue
 		}
-		content, found := omitImageBlocks(proto, turn[contentKey])
+		key := contentKey
+		tool := false
+		var kind string
+		if proto == provider.Responses {
+			json.Unmarshal(turn["type"], &kind)
+			if kind == "function_call_output" {
+				key, tool = "output", true
+			}
+		}
+		if proto == provider.Chat {
+			json.Unmarshal(turn["role"], &kind)
+			tool = kind == "tool"
+		}
+		content, found, directImage := omitImageBlocks(proto, turn[key])
 		if !found {
 			continue
 		}
-		if i == len(turns)-1 {
+		if i == len(turns)-1 && directImage && !tool {
 			return body, true
 		}
-		turn[contentKey] = content
+		turn[key] = content
 		turns[i], _ = json.Marshal(turn)
 		changed = true
 	}
@@ -51,12 +64,14 @@ func textOnlyBody(proto provider.Protocol, body []byte) ([]byte, bool) {
 	return body, false
 }
 
-func omitImageBlocks(proto provider.Protocol, raw json.RawMessage) (json.RawMessage, bool) {
+// directImage distinguishes a pasted image from an image nested in a tool_result.
+func omitImageBlocks(proto provider.Protocol, raw json.RawMessage) (json.RawMessage, bool, bool) {
 	var blocks []json.RawMessage
 	if json.Unmarshal(raw, &blocks) != nil {
-		return raw, false
+		return raw, false, false
 	}
 	found := false
+	directImage := false
 	for i, rawBlock := range blocks {
 		var block map[string]json.RawMessage
 		if json.Unmarshal(rawBlock, &block) != nil {
@@ -82,10 +97,11 @@ func omitImageBlocks(proto provider.Protocol, raw json.RawMessage) (json.RawMess
 		if isImage {
 			blocks[i] = imagePlaceholder(proto)
 			found = true
+			directImage = true
 			continue
 		}
 		if proto == provider.Anthropic && kind == "tool_result" {
-			if content, nested := omitImageBlocks(proto, block["content"]); nested {
+			if content, nested, _ := omitImageBlocks(proto, block["content"]); nested {
 				block["content"] = content
 				blocks[i], _ = json.Marshal(block)
 				found = true
@@ -93,10 +109,10 @@ func omitImageBlocks(proto provider.Protocol, raw json.RawMessage) (json.RawMess
 		}
 	}
 	if !found {
-		return raw, false
+		return raw, false, false
 	}
 	out, _ := json.Marshal(blocks)
-	return out, true
+	return out, true, directImage
 }
 
 func imagePlaceholder(proto provider.Protocol) json.RawMessage {
