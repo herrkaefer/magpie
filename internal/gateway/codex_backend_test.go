@@ -78,6 +78,44 @@ func TestCodexOwnModelPassesThrough(t *testing.T) {
 	}
 }
 
+func TestCodexOwnModelOmitsNonemptyReasoning(t *testing.T) {
+	setup(t, provider.Chat, &fake{t: t})
+	var got []byte
+	chatgpt(t, func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		io.WriteString(w, sse(`data: {"type":"response.completed","response":{"id":"r1"}}`))
+	})
+	code, body := codexPost(t, `{"model":"gpt-5.5","stream":true,"input":[
+	  {"type":"reasoning","content":[{"type":"reasoning_text","text":"foreign thought"}],"encrypted_content":"foreign-token"},
+	  {"type":"reasoning","content":[],"encrypted_content":"openai-own"},
+	  {"type":"reasoning","encrypted_content":"openai-own-without-content"},
+	  {"type":"function_call_output","call_id":"call_1","output":"result"},
+	  {"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+	if code != 200 || !strings.Contains(body, `response.completed`) {
+		t.Fatalf("%d %s", code, body)
+	}
+	var q struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(got, &q); err != nil {
+		t.Fatal(err)
+	}
+	if len(q.Input) != 4 || q.Input[0]["encrypted_content"] != "openai-own" ||
+		q.Input[1]["encrypted_content"] != "openai-own-without-content" ||
+		q.Input[2]["type"] != "function_call_output" || q.Input[3]["role"] != "user" ||
+		strings.Contains(string(got), "foreign-token") {
+		t.Errorf("upstream input: %s", got)
+	}
+}
+
+func TestCodexMagpieModelKeepsReasoningInput(t *testing.T) {
+	body := `{"model":"fake/m1","input":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"thought"}],"encrypted_content":"foreign-token"}]}`
+	got, compact := codexInput([]byte(body), true)
+	if compact || string(got) != body {
+		t.Errorf("magpie input: %s, compact: %t", got, compact)
+	}
+}
+
 func TestCodexOwnModelCompactionPassesThrough(t *testing.T) {
 	setup(t, provider.Chat, &fake{t: t})
 	var got [][]byte
