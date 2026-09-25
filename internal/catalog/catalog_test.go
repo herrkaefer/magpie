@@ -1,6 +1,9 @@
 package catalog
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,5 +154,32 @@ func TestEffortsOf(t *testing.T) {
 		if got := strings.Join(EffortsOf(id), ","); got != want {
 			t.Errorf("EffortsOf(%q) = %q, want %q", id, got, want)
 		}
+	}
+}
+
+func TestFetchedImageCapabilityOverridesCatalog(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[
+			{"id":"vision","modalities":{"input":["text","image"]}},
+			{"id":"text","modalities":{"input":["text"]}},
+			{"id":"unknown"}
+		]}`))
+	}))
+	defer server.Close()
+	live, err := Fetch(context.Background(), server.URL, "", false, nil)
+	if err != nil || len(live) != 3 {
+		t.Fatalf("fetched models: %+v, %v", live, err)
+	}
+	known := []Model{
+		{ID: "vision", Images: true, ImageInput: imageInput([]string{"text", "image"})},
+		{ID: "text", Images: true, ImageInput: imageInput([]string{"text", "image"})},
+		{ID: "unknown", Images: true, ImageInput: imageInput([]string{"text", "image"})},
+	}
+	got := Decorate(live, known)
+	if got[0].ImageInput == nil || !*got[0].ImageInput || !got[0].Images ||
+		got[1].ImageInput == nil || *got[1].ImageInput || got[1].Images ||
+		got[2].ImageInput == nil || !*got[2].ImageInput || !got[2].Images {
+		t.Fatalf("source precedence: %+v", got)
 	}
 }

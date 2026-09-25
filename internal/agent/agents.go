@@ -186,7 +186,12 @@ func magpieProviderJSON(shape string) any {
 	case "opencode":
 		ms := map[string]any{}
 		for _, m := range models {
-			ms[m.ID] = map[string]any{"name": m.Name}
+			e := map[string]any{"name": m.Name}
+			if m.Images {
+				e["attachment"] = true
+				e["modalities"] = map[string]any{"input": []string{"text", "image"}, "output": []string{"text"}}
+			}
+			ms[m.ID] = e
 		}
 		return map[string]any{"npm": "@ai-sdk/openai-compatible", "name": "magpie",
 			"options": map[string]any{"baseURL": gatewayV1(), "apiKey": gateway.Token}, "models": ms}
@@ -209,6 +214,9 @@ func magpieProviderJSON(shape string) any {
 		for _, m := range models {
 			// reasoning lets Pi offer its thinking levels for the model
 			e := map[string]any{"id": m.ID, "name": m.Name, "reasoning": len(m.Efforts) > 0}
+			if m.Images {
+				e["input"] = []string{"text", "image"}
+			}
 			if levels := piThinkingLevels(m.Efforts); levels != nil {
 				e["thinkingLevelMap"] = levels
 			}

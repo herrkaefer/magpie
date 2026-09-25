@@ -365,6 +365,37 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		s.record(call)
 		return
 	}
+	// Some clients send images even when the selected model is known to
+	// accept text only. Reject those requests before routing them upstream.
+	var imageInput *bool
+	if strings.HasPrefix(call.Model, provider.GroupPrefix) {
+		for _, e := range provider.Catalog() {
+			if e.ID == call.Model {
+				imageInput = e.ImageInput
+				break
+			}
+		}
+	} else {
+		for _, m := range p.Available() {
+			if m.ID == model {
+				imageInput = m.ImageInput
+				break
+			}
+		}
+	}
+	if imageInput != nil && !*imageInput {
+		if req, err := parse(from, body); err == nil {
+			for _, msg := range req.Messages {
+				if slices.ContainsFunc(msg.Parts, func(part Part) bool { return part.Kind == Image }) {
+					call.Status, call.Error = 400, "model does not support image input"
+					writeError(w, from, 400, fmt.Sprintf("model %q does not support image input", call.Model))
+					finishCapture()
+					s.record(call)
+					return
+				}
+			}
+		}
+	}
 	// the primary, then its fallbacks while it can't take the request and
 	// nothing has been sent yet
 	var cands []candidate

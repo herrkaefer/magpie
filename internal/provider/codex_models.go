@@ -117,10 +117,11 @@ var codexExecutable = func() string {
 func parseCodexModels(b []byte) []catalog.Model {
 	var list struct {
 		Models []struct {
-			Slug        string `json:"slug"`
-			DisplayName string `json:"display_name"`
-			Visibility  string `json:"visibility"`
-			Priority    int    `json:"priority"`
+			Slug        string   `json:"slug"`
+			DisplayName string   `json:"display_name"`
+			Visibility  string   `json:"visibility"`
+			Priority    int      `json:"priority"`
+			Input       []string `json:"input_modalities"`
 			Levels      []struct {
 				Effort string `json:"effort"`
 			} `json:"supported_reasoning_levels"`
@@ -137,6 +138,10 @@ func parseCodexModels(b []byte) []catalog.Model {
 			continue
 		}
 		mm := catalog.Model{ID: m.Slug, Name: m.DisplayName, Provider: "openai", Context: m.Context}
+		if m.Input != nil {
+			yes := slices.Contains(m.Input, "image")
+			mm.ImageInput, mm.Images = &yes, yes
+		}
 		for _, l := range m.Levels {
 			mm.Efforts = append(mm.Efforts, l.Effort)
 		}

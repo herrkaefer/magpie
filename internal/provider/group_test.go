@@ -52,3 +52,17 @@ func TestGroupImages(t *testing.T) {
 		t.Errorf("%v", got)
 	}
 }
+
+func TestGroupImagesNeedConfirmationFromEveryMember(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	yes := true
+	entries := []Entry{
+		{ID: "a/m", Model: "m", Provider: Provider{ID: "a"}, Images: true, ImageInput: &yes},
+		{ID: "b/m", Model: "m", Provider: Provider{ID: "b"}, Images: true},
+	}
+	groups := groupEntries(entries)
+	if len(groups) != 1 || groups[0].Images || groups[0].ImageInput == nil || *groups[0].ImageInput {
+		t.Fatalf("group with unconfirmed member advertised images: %+v", groups)
+	}
+}

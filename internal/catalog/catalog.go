@@ -35,9 +35,19 @@ type Model struct {
 	APIs []string `json:",omitempty"`
 	// Images is set on a model that takes images as input.
 	Images bool `json:",omitempty"`
+	// ImageInput is the source's explicit answer; nil means it did not say.
+	ImageInput *bool `json:",omitempty"`
 	// Context is how many tokens a prompt may hold, when known: models.dev's
 	// input limit, else its context window.
 	Context int `json:",omitempty"`
+}
+
+func imageInput(modalities []string) *bool {
+	if modalities == nil {
+		return nil
+	}
+	yes := slices.Contains(modalities, "image")
+	return &yes
 }
 
 // Price is what a model costs, in USD per million tokens.
@@ -296,7 +306,7 @@ func Provider(id string) []Model {
 			continue
 		}
 		mm := Model{ID: m.ID, Name: m.Name, Provider: id, Released: m.ReleaseDate, Price: m.Cost, Temperature: m.Temperature,
-			Images: slices.Contains(m.Modalities.Input, "image"), Context: m.window()}
+			Images: slices.Contains(m.Modalities.Input, "image"), ImageInput: imageInput(m.Modalities.Input), Context: m.window()}
 		mm.Efforts = m.efforts()
 		out = append(out, mm)
 	}
@@ -446,10 +456,11 @@ func Codex() []Model {
 	}
 	var cache struct {
 		Models []struct {
-			Slug        string `json:"slug"`
-			DisplayName string `json:"display_name"`
-			Visibility  string `json:"visibility"`
-			Priority    int    `json:"priority"`
+			Slug        string   `json:"slug"`
+			DisplayName string   `json:"display_name"`
+			Visibility  string   `json:"visibility"`
+			Priority    int      `json:"priority"`
+			Input       []string `json:"input_modalities"`
 			Levels      []struct {
 				Effort string `json:"effort"`
 			} `json:"supported_reasoning_levels"`
@@ -464,7 +475,10 @@ func Codex() []Model {
 		if m.Visibility == "hide" {
 			continue
 		}
-		mm := Model{ID: m.Slug, Name: m.DisplayName, Provider: "openai"}
+		mm := Model{ID: m.Slug, Name: m.DisplayName, Provider: "openai", ImageInput: imageInput(m.Input)}
+		if mm.ImageInput != nil {
+			mm.Images = *mm.ImageInput
+		}
 		for _, l := range m.Levels {
 			mm.Efforts = append(mm.Efforts, l.Effort)
 		}

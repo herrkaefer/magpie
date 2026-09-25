@@ -194,9 +194,10 @@ func groupEntries(entries []Entry) []Entry {
 			}
 			var efforts []string
 			images, ctx := false, 0
+			var imageInput *bool
 			for _, x := range entries {
 				if x.Provider.ID == m.Provider.ID && x.Model == m.Model {
-					efforts, images, ctx = x.Efforts, x.Images, x.Context
+					efforts, images, ctx, imageInput = x.Efforts, x.Images, x.Context, x.ImageInput
 				}
 			}
 			e.Images = e.Images && images
@@ -205,9 +206,14 @@ func groupEntries(entries []Entry) []Entry {
 			}
 			if i == 0 {
 				e.Efforts = efforts
+				e.ImageInput = imageInput
 				continue
 			}
 			e.Efforts = slices.DeleteFunc(slices.Clone(e.Efforts), func(v string) bool { return !slices.Contains(efforts, v) })
+			e.ImageInput = sharedImageInput(e.ImageInput, imageInput)
+		}
+		if e.ImageInput != nil && !*e.ImageInput {
+			e.Images = false
 		}
 		out = append(out, e)
 	}

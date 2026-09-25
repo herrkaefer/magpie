@@ -183,7 +183,12 @@ func fetchOne(ctx context.Context, url, key string, anthropic bool, headers map[
 		if name == "" {
 			name = id
 		}
-		out = append(out, Model{ID: id, Name: name})
+		input := imageInput(r.Modalities.Input)
+		m := Model{ID: id, Name: name, ImageInput: input}
+		if input != nil {
+			m.Images = *input
+		}
+		out = append(out, m)
 	}
 	return out, nil
 }
@@ -192,6 +197,9 @@ type liveModel struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
+	Modalities  struct {
+		Input []string `json:"input"`
+	} `json:"modalities"`
 }
 
 // Decorate fills in names and reasoning levels for live models from the
@@ -212,7 +220,10 @@ func Decorate(live []Model, known []Model) []Model {
 				m.Name = k.Name
 			}
 			m.Efforts, m.Released, m.Provider = k.Efforts, k.Released, k.Provider
-			m.Images = m.Images || k.Images
+			if m.ImageInput == nil {
+				m.ImageInput = k.ImageInput
+				m.Images = m.Images || k.Images
+			}
 			if m.Context == 0 {
 				m.Context = k.Context
 			}
