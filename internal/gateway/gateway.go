@@ -366,7 +366,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		return
 	}
 	// Some clients send images even when the selected model is known to
-	// accept text only. Reject those requests before routing them upstream.
+	// accept text only. Reject a new image and omit images from history.
 	var imageInput *bool
 	if strings.HasPrefix(call.Model, provider.GroupPrefix) {
 		for _, e := range provider.Catalog() {
@@ -384,16 +384,22 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 	}
 	if imageInput != nil && !*imageInput {
-		if req, err := parse(from, body); err == nil {
+		var currentImage bool
+		body, currentImage = textOnlyBody(from, body)
+		if req, err := parse(from, body); err == nil && !currentImage {
 			for _, msg := range req.Messages {
 				if slices.ContainsFunc(msg.Parts, func(part Part) bool { return part.Kind == Image }) {
-					call.Status, call.Error = 400, "model does not support image input"
-					writeError(w, from, 400, fmt.Sprintf("model %q does not support image input", call.Model))
-					finishCapture()
-					s.record(call)
-					return
+					currentImage = true
+					break
 				}
 			}
+		}
+		if currentImage {
+			call.Status, call.Error = 400, "model does not support image input"
+			writeError(w, from, 400, fmt.Sprintf("model %q does not support image input", call.Model))
+			finishCapture()
+			s.record(call)
+			return
 		}
 	}
 	// the primary, then its fallbacks while it can't take the request and

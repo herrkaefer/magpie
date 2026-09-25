@@ -144,14 +144,19 @@ func (p Provider) fetchPerKey(ctx context.Context, keys []KeyAccount) ([]catalog
 	return out, catalog.SaveLive(p.ID, base, out)
 }
 
-// A routed model can advertise images only when every source confirms them.
-// Two unknown answers remain unknown; any other unconfirmed route is unsafe.
+// An explicit text-only answer wins. Without one, an unknown answer stays
+// unknown; the caller can still use the catalog's image capability estimate.
 func sharedImageInput(a, b *bool) *bool {
-	if a == nil && b == nil {
+	if a != nil && !*a {
+		return a
+	}
+	if b != nil && !*b {
+		return b
+	}
+	if a == nil || b == nil {
 		return nil
 	}
-	yes := a != nil && *a && b != nil && *b
-	return &yes
+	return a
 }
 
 // allKeys is every key the provider has, on or not, the first first.

@@ -1,0 +1,110 @@
+package gateway
+
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/yetone/magpie/internal/provider"
+)
+
+// textOnlyBody rejects an image in the latest turn and omits images in older
+// turns. It edits the wire JSON so passthrough keeps fields the IR does not
+// represent (such as provider-specific request options).
+func textOnlyBody(proto provider.Protocol, body []byte) ([]byte, bool) {
+	var request map[string]json.RawMessage
+	if json.Unmarshal(body, &request) != nil {
+		return body, false
+	}
+	turnsKey, contentKey := "messages", "content"
+	switch proto {
+	case provider.Responses:
+		turnsKey = "input"
+	case provider.Gemini:
+		turnsKey, contentKey = "contents", "parts"
+	}
+	var turns []json.RawMessage
+	if json.Unmarshal(request[turnsKey], &turns) != nil {
+		return body, false
+	}
+	changed := false
+	for i, raw := range turns {
+		var turn map[string]json.RawMessage
+		if json.Unmarshal(raw, &turn) != nil {
+			continue
+		}
+		content, found := omitImageBlocks(proto, turn[contentKey])
+		if !found {
+			continue
+		}
+		if i == len(turns)-1 {
+			return body, true
+		}
+		turn[contentKey] = content
+		turns[i], _ = json.Marshal(turn)
+		changed = true
+	}
+	if !changed {
+		return body, false
+	}
+	request[turnsKey], _ = json.Marshal(turns)
+	body, _ = json.Marshal(request)
+	return body, false
+}
+
+func omitImageBlocks(proto provider.Protocol, raw json.RawMessage) (json.RawMessage, bool) {
+	var blocks []json.RawMessage
+	if json.Unmarshal(raw, &blocks) != nil {
+		return raw, false
+	}
+	found := false
+	for i, rawBlock := range blocks {
+		var block map[string]json.RawMessage
+		if json.Unmarshal(rawBlock, &block) != nil {
+			continue
+		}
+		var kind string
+		json.Unmarshal(block["type"], &kind)
+		isImage := false
+		switch proto {
+		case provider.Chat:
+			isImage = kind == "image_url"
+		case provider.Responses:
+			isImage = kind == "input_image"
+		case provider.Anthropic:
+			isImage = kind == "image"
+		case provider.Gemini:
+			var data struct {
+				MimeType string `json:"mimeType"`
+			}
+			json.Unmarshal(block["inlineData"], &data)
+			isImage = strings.HasPrefix(data.MimeType, "image/") || len(block["fileData"]) > 0
+		}
+		if isImage {
+			blocks[i] = imagePlaceholder(proto)
+			found = true
+			continue
+		}
+		if proto == provider.Anthropic && kind == "tool_result" {
+			if content, nested := omitImageBlocks(proto, block["content"]); nested {
+				block["content"] = content
+				blocks[i], _ = json.Marshal(block)
+				found = true
+			}
+		}
+	}
+	if !found {
+		return raw, false
+	}
+	out, _ := json.Marshal(blocks)
+	return out, true
+}
+
+func imagePlaceholder(proto provider.Protocol) json.RawMessage {
+	switch proto {
+	case provider.Responses:
+		return json.RawMessage(`{"type":"input_text","text":"[Image omitted: this model accepts text only.]"}`)
+	case provider.Gemini:
+		return json.RawMessage(`{"text":"[Image omitted: this model accepts text only.]"}`)
+	}
+	return json.RawMessage(`{"type":"text","text":"[Image omitted: this model accepts text only.]"}`)
+}

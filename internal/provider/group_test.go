@@ -53,7 +53,7 @@ func TestGroupImages(t *testing.T) {
 	}
 }
 
-func TestGroupImagesNeedConfirmationFromEveryMember(t *testing.T) {
+func TestGroupImagesKeepUnknownMemberUnknown(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", "")
 	yes := true
@@ -62,7 +62,7 @@ func TestGroupImagesNeedConfirmationFromEveryMember(t *testing.T) {
 		{ID: "b/m", Model: "m", Provider: Provider{ID: "b"}, Images: true},
 	}
 	groups := groupEntries(entries)
-	if len(groups) != 1 || groups[0].Images || groups[0].ImageInput == nil || *groups[0].ImageInput {
-		t.Fatalf("group with unconfirmed member advertised images: %+v", groups)
+	if len(groups) != 1 || !groups[0].Images || groups[0].ImageInput != nil {
+		t.Fatalf("group with inferred image support lost images: %+v", groups)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -88,3 +89,65 @@ func TestConfiguredModelsAdvertiseImageInput(t *testing.T) {
 }
 
 func imageInputBool(v bool) *bool { return &v }
+
+func TestInferredGroupImagesReachAgentCatalogs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalog.CachePath(), []byte(`{"anthropic":{"models":{"claude-sonnet-4-5":{"id":"claude-sonnet-4-5","modalities":{"input":["text","image"]}}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+	for _, p := range []provider.Provider{
+		{ID: "confirmed", Catalog: "anthropic", Chat: "https://example.test/v1", Key: "key", Models: []string{"claude-sonnet-4-5"}},
+		{ID: "unknown", Chat: "https://example.test/v1", Key: "key", Models: []string{"claude-sonnet-4-5"}},
+	} {
+		if err := provider.Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := catalog.SaveLive("unknown", "https://example.test/v1", []catalog.Model{{ID: "claude-sonnet-4-5"}}); err != nil {
+		t.Fatal(err)
+	}
+	id := "group/auto-claude-sonnet-4-5"
+	oc := magpieProviderJSON("opencode").(map[string]any)["models"].(map[string]any)[id].(map[string]any)
+	if oc["attachment"] != true || !reflect.DeepEqual(oc["modalities"].(map[string]any)["input"], []string{"text", "image"}) {
+		t.Fatalf("OpenCode group image input: %v", oc)
+	}
+	pi := magpieProviderJSON("pi").(map[string]any)["models"].([]map[string]any)
+	found := false
+	for _, m := range pi {
+		if m["id"] == id {
+			found = true
+			if !reflect.DeepEqual(m["input"], []string{"text", "image"}) {
+				t.Fatalf("Pi group image input: %v", m)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Pi group missing")
+	}
+	var codex struct {
+		Models []struct {
+			Slug  string   `json:"slug"`
+			Input []string `json:"input_modalities"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(codexcat.Catalog(magpieModels()), &codex); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range codex.Models {
+		if m.Slug == id {
+			if !reflect.DeepEqual(m.Input, []string{"text", "image"}) {
+				t.Fatalf("Codex group image input: %v", m.Input)
+			}
+			return
+		}
+	}
+	t.Fatal("Codex group missing")
+}
